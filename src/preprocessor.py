@@ -1,25 +1,29 @@
-# Author: Utkarsh
 """
-Reads train csv data from path, preprocess the data, build a preprocessor pipeline and output the preprocessor
-Usage: preprocessor.py --train_set_path=<train_set_path>  --column_transformer_out_path=<column_transformer_out_path> 
+Author: Utkarsh
+
+Reads train csv data from path, preprocess the data, and saves it as a csv file
+
+Usage: src/preprocessor.py --raw_data_path=<raw_data_path>  --processed_data_path=<processed_data_path>
+
 Options:
---train_set_path=<train_set_path>                               path to the train set
---column_transformer_out_path=<column_transformer_out_path>     path to column transformer
+--raw_data_path=<raw_data_path>                 path to the raw data
+--processed_data_path=<processed_data_path>     path to the processed data
+
 Example:
-python src/preprocessor.py --train_set_path=data/processed/train_df.csv  --column_transformer_out_path=models
+python src/preprocessor.py --raw_data_path=data/raw/train_df.csv  --processed_data_path=data/processed/train_df.csv
 """
 
 
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+
 import os
-from os import path
 import re
 import string
 import altair as alt
-import matplotlib.pyplot as plt
 
-from collections import Counter
+from docopt import docopt
 
 import nltk
 
@@ -32,20 +36,17 @@ import nltk
 
 from nltk import word_tokenize
 from nltk import pos_tag
-from nltk.corpus import cmudict, stopwords
-
 
 alt.data_transformers.enable('data_server')
 alt.renderers.enable('mimetype')
 
 
-def read_data():
-    if os.path.exists( "../data/processed/train.csv"):
-        train_df = pd.read_csv("../data/processed/train.csv")
-        print("Read processed data")
-    else:
-        train_df = pd.read_csv("../data/raw/train.csv")
+def read_data(filepath):
+    if os.path.exists(filepath):
+        train_df = pd.read_csv(filepath)
         print("Read raw data")
+        return train_df
+    return None
 
 
 def remove_punctuation(word):
@@ -67,22 +68,26 @@ def clean_data(text):
 
 
 # Create a feature "author_is_null"
-def author_is_null(x):
-    if x["author"] != x["author"]:
+def author_is_null(data):
+    if data["author"] != data["author"]:
         return 0
     return 1
 
 
 # Change author null to "Unknown"
-def get_author_unknown():
-    unknown_authors_ids = train_df.query("author.isnull()")["id"]
-    train_df['updated_author_column_name'] = np.where(~train_df['id'].isin(unknown_authors_ids), train_df['author'], 'Unknown')
+def get_author_unknown(data):
+    unknown_authors_ids = data.query("author.isnull()")["id"]
+    data['updated_author_column_name'] = np.where(~data['id'].isin(unknown_authors_ids), data['author'], 'Unknown')
+
+    return data
 
 
 # Others category if value_counts of an author is less than 5
-def define_other_authors():
-    less_frequent = train_df['author'].value_counts()[train_df['author'].value_counts() <= 5].index.tolist()
-    train_df['author'] = np.where(train_df['author'].isin(less_frequent), 'Other', train_df['author'])
+def define_other_authors(data, threshold=5):
+    less_frequent = data["author"].value_counts()[data["author"].value_counts() <= threshold].index.tolist()
+    data["author"] = np.where(data["author"].isin(less_frequent), 'Other', data["author"])
+
+    return data
 
 
 # Create if "is_multiple_authors"
@@ -194,7 +199,7 @@ def get_pos_count(text):
     if len(str(text)) == 0:
         return 0, 0, 0
 
-    for word, pos in pos_tag(word_tokenize(str(text))):
+    for _, pos in pos_tag(word_tokenize(str(text))):
         if(pos[0] == 'N'):
             noun_count += 1
         if(pos[0] == 'V'):
@@ -210,7 +215,7 @@ def is_text_empty(data):
     data["is_text_empty"] = [
         1 if text == " " or
         not text == text
-        else 0 for text in train_df["text"]
+        else 0 for text in data["text"]
     ]
 
     return data
@@ -230,29 +235,27 @@ def get_title_text_similarity(data):
     return data
 
 
-
-
-
-
-
 # Combine preprocessing steps
-def preprocess():
+def preprocess(train_df):
+
+    print("Begin Preprocessing...")
+
     train_df["title"] = train_df["title"].apply(clean_data)
     train_df["title"] = train_df["title"].apply(clean_data)
 
     train_df["author_is_null"] = train_df.apply(lambda x: author_is_null(x), axis=1)
 
+    train_df = get_author_unknown(train_df)
+
+    train_df = define_other_authors(train_df)
+
     train_df = is_multiple_authors(train_df)
-    train_df.query("is_multiple_authors == 1")["label"].value_counts()
 
     train_df = author_contains_domain(train_df)
-    train_df.query("author_contains_domain == 1")["label"].value_counts()
 
     train_df = is_title_null(train_df)
-    train_df.query("is_title_null == 1")["label"].value_counts()
 
     train_df = title_contains_famous_journal(train_df)
-    train_df.query("title_contains_famous_journal == 1")["label"].value_counts()
 
     train_df = no_of_words(train_df)
 
@@ -277,8 +280,38 @@ def preprocess():
     )
 
     train_df = is_text_empty(train_df)
-    train_df.query("text == ' '")["label"].value_counts()
 
     train_df = get_title_text_similarity(train_df)
 
     train_df["text"] = train_df["text"].values.astype("U")
+
+    print("Preprocessing Done!")
+
+    return train_df
+
+
+def save_csv(data, data_out_path):
+    print("Now Saving Data...")
+
+    try:
+        if not os.path.exists(os.path.dirname(data_out_path)):
+            os.makedirs(os.path.dirname(data_out_path))
+
+        data.to_csv(data_out_path, encoding="utf-8")
+        print("Saved Preprocessed Data!")
+    except:
+        print("Save Preprocessed Data Failed!")
+
+
+def main(raw_data_path, processed_data_path):
+    if not os.path.exists(processed_data_path):
+        train_df = read_data(raw_data_path)
+    
+    if not train_df is None:
+        train_df = preprocess(train_df)
+        save_csv(train_df, processed_data_path)
+
+
+if __name__ == "__main__":
+    opt = docopt(__doc__)
+    main(opt["--raw_data_path"], opt["--processed_data_path"])
